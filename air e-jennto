@@ -1,0 +1,214 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+import datetime
+import os
+import csv
+
+# シミュレーションパラメータの定義
+WIDTH = 50.0                  # 空間の幅
+HEIGHT = 50.0                 # 空間の高さ
+AGENTS_NUMBER = 300           # エージェント総数 (300個固定)
+SIMULATION_TIME = 600         # シミュレーション時間（600ステップ ≒ 10分換算）
+AGENT_SPEED = 1.5             # エージェントの基本移動速度（400m/sの熱運動に相当）
+
+# 【風のパラメータ】
+WIND_SPEED = 3.0              # 風速 xm/s (右方向へ進む速度)
+WIND_PROBABILITY = 0.8        # 分子が風の影響を受ける確率 (0.6 = 60%)
+
+# エージェントの状態の定義
+CLEAN = 0   # 綺麗な空気
+VIRUS = 1   # ウイルス
+
+# 状態の色の定義
+COLOR_CLEAN = 'blue'
+COLOR_VIRUS = 'red'
+
+# 開口部（窓・ドア）のY座標の範囲を定義
+LEFT_WINDOW_1 = (10.0, 18.0)
+LEFT_WINDOW_2 = (32.0, 40.0)
+
+RIGHT_DOOR_1 = (8.0, 20.0)
+RIGHT_DOOR_2 = (30.0, 42.0)
+
+# エージェントクラスの定義
+class Agent:
+    def __init__(self, x, y, state):
+        self.x = x            
+        self.y = y            
+        self.state = state    
+
+    def move(self):
+        # ─── 【リアル化の修正】現在位置が「風の通り道（窓・ドアの正面）」に入っているか判定 ───
+        # 左の窓1(10-18)から右のドア1(8-20)へ向かうルート、および窓2からドア2へのルート
+        in_wind_route_1 = (8.0 <= self.y <= 20.0)
+        in_wind_route_2 = (30.0 <= self.y <= 42.0)
+        
+        # 風の通り道にいて、かつ確率に当選した場合だけ右へ直進する
+        if (in_wind_route_1 or in_wind_route_2) and (np.random.rand() < WIND_PROBABILITY):
+            dx = WIND_SPEED
+            dy = 0.0
+        else:
+            # 風の通り道外（壁際・部屋の隅）、または確率に外れた場合は、
+            # 現実と同じ「滞留・激しいランダム熱運動」になる
+            angle = np.random.rand() * 2 * np.pi
+            dx = AGENT_SPEED * np.cos(angle)
+            dy = AGENT_SPEED * np.sin(angle)
+            
+        self.x += dx
+        self.y += dy
+
+        # （以下、上下左右の壁判定はそのまま）
+
+        # 上下の壁（密閉）
+        if self.y < 0: self.y = 0
+        elif self.y > HEIGHT: self.y = HEIGHT
+            
+        # 左側の壁の判定（窓以外の壁にぶつかった場合は室内へ突っ返す）
+        if self.x < 0:
+            in_window1 = (LEFT_WINDOW_1[0] <= self.y <= LEFT_WINDOW_1[1])
+            in_window2 = (LEFT_WINDOW_2[0] <= self.y <= LEFT_WINDOW_2[1])
+            if not (in_window1 or in_window2):
+                self.x = 0
+
+# 換気（右側のドアから退出）の判定チェック
+def check_ventilation(agent):
+    if agent.x >= WIDTH:
+        y = agent.y
+        door1 = (RIGHT_DOOR_1[0] <= y <= RIGHT_DOOR_1[1])
+        door2 = (RIGHT_DOOR_2[0] <= y <= RIGHT_DOOR_2[1])
+        if door1 or door2:
+            return True # ドアから退出
+        else:
+            agent.x = WIDTH # ドア以外の壁なら室内に跳ね返る
+    if agent.x < 0:
+        return True 
+    return False
+
+def spawn_new_clean_agent():
+    x = 0.0
+    if np.random.rand() < 0.5:
+        y = np.random.uniform(LEFT_WINDOW_1[0], LEFT_WINDOW_1[1])
+    else:
+        y = np.random.uniform(LEFT_WINDOW_2[0], LEFT_WINDOW_2[1])
+    return Agent(x, y, CLEAN)
+
+def initialize_simulation():
+    agents = []
+    virus_number = int(AGENTS_NUMBER * 0.1) # 初期割合 9:1 (ウイルス30個)
+    clean_number = AGENTS_NUMBER - virus_number
+    
+    for _ in range(clean_number):
+        agents.append(Agent(np.random.rand() * WIDTH, np.random.rand() * HEIGHT, CLEAN))
+    for _ in range(virus_number):
+        agents.append(Agent(np.random.rand() * WIDTH, np.random.rand() * HEIGHT, VIRUS))
+    return agents
+
+# シミュレーション実行
+def run_simulation():
+    count_clean = []
+    count_virus = []
+    history = []
+
+    agents = initialize_simulation()
+
+    for frame in range(SIMULATION_TIME):
+        survived_agents = []
+        exit_count = 0
+        
+        for agent in agents:
+            agent.move()
+            if check_ventilation(agent):
+                exit_count += 1
+            else:
+                survived_agents.append(agent)
+        
+        for _ in range(exit_count):
+            survived_agents.append(spawn_new_clean_agent())
+            
+        agents = survived_agents
+
+        num_clean = sum(1 for a in agents if a.state == CLEAN)
+        num_virus = sum(1 for a in agents if a.state == VIRUS)
+        
+        count_clean.append(num_clean)
+        count_virus.append(num_virus)
+
+        agents_copy = [Agent(a.x, a.y, a.state) for a in agents]
+        history.append((agents_copy, count_clean[:], count_virus[:]))
+
+    return history, count_clean, count_virus
+
+# 描画設定
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+
+ax1.set_xlim(-2, WIDTH + 2)
+ax1.set_ylim(-2, HEIGHT + 2)
+ax1.set_aspect('equal')
+ax1.set_title("Room Simulation (Frame: 0)")
+
+# 壁のプロット
+ax1.plot([0, 0], [0, LEFT_WINDOW_1[0]], color='black', linewidth=3)
+ax1.plot([0, 0], [LEFT_WINDOW_1[1], LEFT_WINDOW_2[0]], color='black', linewidth=3)
+ax1.plot([0, 0], [LEFT_WINDOW_2[1], HEIGHT], color='black', linewidth=3)
+ax1.plot([WIDTH, WIDTH], [0, RIGHT_DOOR_1[0]], color='black', linewidth=3)
+ax1.plot([WIDTH, WIDTH], [RIGHT_DOOR_1[1], RIGHT_DOOR_2[0]], color='black', linewidth=3)
+ax1.plot([WIDTH, WIDTH], [RIGHT_DOOR_2[1], HEIGHT], color='black', linewidth=3)
+ax1.plot([0, WIDTH], [0, 0], color='black', linewidth=3)
+ax1.plot([0, WIDTH], [HEIGHT, HEIGHT], color='black', linewidth=3)
+
+# 右グラフの初期化
+ax2.set_xlim(0, SIMULATION_TIME)
+ax2.set_ylim(0, AGENTS_NUMBER)
+ax2.set_xlabel('Time Steps (Total 10 min)')
+ax2.set_ylabel('Number of Air Particles')
+ax2.set_title('Air Quality Change over Time')
+line_clean, = ax2.plot([], [], label='Clean Air', color=COLOR_CLEAN)
+line_virus, = ax2.plot([], [], label='Virus', color=COLOR_VIRUS)
+ax2.legend()
+ax2.grid(True)
+
+# シミュレーションデータ生成
+history, final_clean_counts, final_virus_counts = run_simulation()
+
+# Excel用CSVデータの自動書き出し
+now = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+csv_filename = f'ventilation_data_{now}.csv'
+
+try:
+    csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), csv_filename)
+except NameError:
+    csv_path = csv_filename
+
+with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+    writer = csv.writer(f)
+    writer.writerow(['TimeStep(Time)', 'Clean_Air_Count', 'Virus_Count', 'Clean_Ratio(%)', 'Virus_Ratio(%)'])
+    for t in range(SIMULATION_TIME):
+        c_count = final_clean_counts[t]
+        v_count = final_virus_counts[t]
+        c_ratio = (c_count / AGENTS_NUMBER) * 100
+        v_ratio = (v_count / AGENTS_NUMBER) * 100
+        writer.writerow([t, c_count, v_count, f"{c_ratio:.1f}", f"{v_ratio:.1f}"])
+
+print(f"\n📊 Excel用データを保存しました: {csv_filename}")
+
+# 初期状態描画
+agents = history[0][0]
+scatter = ax1.scatter([a.x for a in agents], [a.y for a in agents], 
+                     c=[COLOR_CLEAN if a.state == CLEAN else COLOR_VIRUS for a in agents], s=25, edgecolors='black', linewidths=0.5)
+
+# アニメーション関数
+def animate(frame):
+    agents, count_clean, count_virus = history[frame]
+    scatter.set_offsets(np.c_[[a.x for a in agents], [a.y for a in agents]])
+    scatter.set_facecolor([COLOR_CLEAN if a.state == CLEAN else COLOR_VIRUS for a in agents])
+    ax1.set_title(f"Room Simulation (Frame: {frame})")
+    line_clean.set_data(range(len(count_clean)), count_clean)
+    line_virus.set_data(range(len(count_virus)), count_virus)
+    return scatter, line_clean, line_virus,
+
+ani = animation.FuncAnimation(fig, animate, frames=SIMULATION_TIME, blit=False, repeat=False)
+plt.tight_layout()
+
+print("シミュレーション画面を表示します...")
+plt.show()
